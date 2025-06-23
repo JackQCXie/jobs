@@ -6,11 +6,43 @@ import regex
 import requests
 from datetime import datetime
 import pandas
+import argparse
+
+# %%
+parser = argparse.ArgumentParser(
+                    prog='get_linkedin_jobposts',
+                    description='Scrapes LinkedIn job posts for a given city'
+                    )
+
+parser.add_argument('-l', '--location', default='vancouver')
+
+args, unknown = parser.parse_known_args()
+
+# global arguments
+location = args.location
+today = datetime.now().strftime('%Y%m%d')
+
+# %%
+# TODO:
+# - break up functions
+# - back out search terms (from log file)
+# - resume search
+# - add argparse for more locations
+
+# src = '/home/qcx201/Projects/jobs/linkedin/log/get_jobposts-vancouver.log'
+# with open(src, 'r') as f:
+#     log = f.read()
+
+# lines = log.split('\n')
+# lines = [line for line in lines if 'search-keyword' in line]
+# keywords = [ln.split(': ')[-1] for ln in lines]
+# keywords
 
 # %%
 def search_jobs(params):
     """
-    Generator function to scrape job posts from LinkedIn. Limited to 1000 results search parameter.
+    Generator function to scrape job posts from LinkedIn.
+    Note: Linkedin limits outputs to 1000 results per search parameter.
     """
     
     # URL for LinkedIn job posts
@@ -25,19 +57,20 @@ def search_jobs(params):
     sleep = 1
     while True:
         resp = requests.get(url, params=params, headers=headers)
-        if resp.status_code == 429:
+        if resp.status_code == 429: # too many requests
             time.sleep(sleep)
             sleep += 1
         else:
             break
+        
 
-
-    print('-'*50)
-    print(f'request-url [status {resp.status_code}]: {resp.url}')
-
+    print('resp-url:', resp.url)
+    
     # exit function if bad response or empty HTML document
     if (not resp) or ('<!DOCTYPE html>\n\n<!---->' in resp.text):
-        print('No more jobs found or an error occurred.')
+        print('-'*50)
+        print(f'request-url [status {resp.status_code}]: {resp.url}')
+        print('Bad request or no more jobs found.') # TODO: 
         yield
 
     # iterate over job list items
@@ -68,14 +101,49 @@ def search_jobs(params):
             'status' : texts[3]     if len(texts) > 3 else None,
             'job_url' : hrefs[0].split('?')[0],
             'firm_url': hrefs[1]    if len(hrefs) > 1 else None,
+            'keywords' : params['keywords'],
         }
 
         yield res
 
 # %%
-def get_freq(data):
+def get_number_jobs(location):
+    '''
+    Get number of jobs from search page
+    '''
     
-    # df = pandas.DataFrame(data)
+    # approx. number of job postings
+    url = f'https://www.linkedin.com/jobs/search?location={location}'
+    resp = requests.get(url)
+    doc = html.fromstring(resp.content)
+    njobs = doc.xpath('//span[@class="results-context-header__job-count"]//text()')[0]
+
+    return int(''.join(c for c in njobs if c.isnumeric()))
+
+# %%
+def save_data(data, label=today):
+    '''
+    Save data
+    '''
+
+    df = pandas.DataFrame(data)
+    
+    loc = ''.join(c for c in location if c.isalpha())
+    
+    dst = f'../data/jobposts/{label}-{loc}.csv'
+    df.to_csv(dst, index=False)
+
+    print(f'Saved {df.shape}:', dst)
+    print('Now:', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+# %%
+def get_freq(data):
+    '''
+    Get keyword frequency from job post and companies
+    
+    TODO: create filter for searched keywords
+    '''
+    
     df = pandas.DataFrame(data)
 
     # get keywords from job postings
@@ -98,112 +166,96 @@ def get_freq(data):
     
 
 # %%
-location = 'vancouver'
-
-# def get_jobs_by_location(location):
-#     """
-#     Get job postings for a specific location.
-#     """
-
-
-# approx. number of job postings
-url = f'https://www.linkedin.com/jobs/search?location={location}'
-resp = requests.get(url)
-doc = html.fromstring(resp.content)
-njobs = doc.xpath('//span[@class="results-context-header__job-count"]//text()')[0]
-
-nskip, ncount = 0, 0
-
-# initialize data structures
-data = []
-job_urls = set()
-searched_kws = set()
-kw = ''
-
-# outer loop
-while True:
-
-    # inner loop
-    run_search, start = True, 0
-
-    while run_search:
-
-        params = {
-            'location': location,
-            'start': start,
-            'keywords' : kw,
-            }
-        
-        search_results = search_jobs(params)
-        
-        for search_res in search_results:
-
-            # break inner loop if no more results
-            start += 1
-            ncount += 1
-            if not search_res:
-                run_search = False
-                break
-
-            # check if the job url is already added
-            job_url = search_res['job_url'].split('?')[0]
-            
-            if job_url not in job_urls:
-                job_urls.add(job_url)
-                data.append(search_res)
-                print(f'[job {len(data):,} of {njobs}]', job_url)
-
-            # else:
-            #     nskip += 1
-            #     print(f'[skip {nskip:,} of {ncount:,}]', job_url)
-
-    # save data
-    df = pandas.DataFrame(data)
+# initialize
+if __name__ == '__main__':
     
-    date = datetime.now().strftime('%Y%m%d')
-    loc = ''.join(c for c in location if c.isalpha())
+    print('Location:', location)
+    print('Start time:', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+    print('='*50)
+
+    njobs = get_number_jobs(location)
+
+    # initialize data structures
     
-    dst = f'../data/jobposts/{date}-{loc}.csv'
-    df.to_csv(dst, index=False)
+    data = []
+    job_urls = set()
+    searched_kws = set()
+    kw = ''
 
-    print(f'Saved {df.shape}:', dst)
-    print('Now:', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    past = datetime.now()
 
-    # get word frequencies
-    freq = get_freq(data)
-
-    # filter top unsearched keyword
-    wf = pandas.DataFrame(freq)
-    wf = wf.sort_values(by='count', ascending=False) 
-    cond = ~wf['keyword'].isin(searched_kws)
-    kws = wf[cond]
-
-    # break outer loop if no more new keywords found
-    if kws.empty:
-        print('No more keywords found.')
-        break
-
-    kw = kws.iloc[0]['keyword']
-    searched_kws.add(kw)
-
-    print('*'*50)
-    print(f'search-keyword ({len(searched_kws):,}):', kw)
 
 # %%
-# locations = [
-#     'vancouver', 'montreal', 'toronto', 'ottawa',
-#     'stockholm', 'paris', 'berlin', 'london',
-#     'new york, NY', 'san francisco',
-# ]
-
-location = 'vancouver'
-
-# if __name__ == '__main__':
+if __name__ == '__main__':
     
-#     print('='*50)
-#     print('Location:', location)
-#     print('Start time:', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    # break outer loop if most jobs found or no new keywords found
+    while True:
 
-#     get_jobs_by_location(location)
+        # break inner loop if no more results in page
+        # typically 20 results per page
+        run_search, start = True, 0
+        while run_search:
+
+            params = {
+                'location': location,
+                'start': start,
+                'keywords' : kw,
+                }
+            
+            search_results = search_jobs(params)
+            for search_res in search_results:
+
+                start += 1 # local counter (inner loop)
+
+                # break inner loop if no more results
+                if not search_res:
+                    run_search = False
+                    break
+
+                # add to data if new job url
+                job_url = search_res['job_url'].split('?')[0]
+                
+                if job_url not in job_urls:
+                    job_urls.add(job_url)
+                    data.append(search_res)
+
+                    # get yield time
+                    print(f'[job {len(data):,} of {njobs:,}+]', datetime.now(), job_url)
+
+        # save data
+        save_data(data)
+
+        # break outer loop if most jobs found
+        if len(data) >= njobs:
+            print('Most jobs found.')
+            break
+
+        # get word frequencies
+        freq = get_freq(data)
+
+        # filter top unsearched keyword
+        wf = pandas.DataFrame(freq)
+        wf = wf.sort_values(by='count', ascending=False)
+        cond = ~wf['keyword'].isin(searched_kws)
+        kws = wf[cond]
+
+        # break outer loop if no new keywords found
+        if kws.empty:
+            print('No more keywords found.')
+            break
+
+        # add new keyword to list of searched
+        kw = kws.iloc[0]['keyword']
+        searched_kws.add(kw)
+
+        print('*'*50)
+        print(f'search-keyword ({len(searched_kws):,}):', kw)
+
+    print('=' * 50)
+    print('Script complete.')
+
+# %%
+
 
 
