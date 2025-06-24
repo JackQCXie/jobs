@@ -1,4 +1,5 @@
 # %%
+import os
 import time
 from lxml import html
 import regex
@@ -16,27 +17,20 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument('-l', '--location', default='vancouver')
 
+# set default date to today
+today = datetime.now().strftime('%Y%m%d')
+parser.add_argument('-d', '--date', default=today)
+
 args, unknown = parser.parse_known_args()
 
 # global arguments
 location = args.location
-today = datetime.now().strftime('%Y%m%d')
+date = args.date
 
-# %%
-# TODO:
-# - break up functions
-# - back out search terms (from log file)
-# - resume search
-# - add argparse for more locations
-
-# src = '/home/qcx201/Projects/jobs/linkedin/log/get_jobposts-vancouver.log'
-# with open(src, 'r') as f:
-#     log = f.read()
-
-# lines = log.split('\n')
-# lines = [line for line in lines if 'search-keyword' in line]
-# keywords = [ln.split(': ')[-1] for ln in lines]
-# keywords
+# destination file
+loc = ''.join(c for c in location if c.isalpha())
+dst = os.path.abspath(f'../data/jobposts/{date}-{loc}.csv')
+print('dst:', dst)
 
 # %%
 def search_jobs(params):
@@ -65,7 +59,7 @@ def search_jobs(params):
         
 
     print('resp-url:', resp.url)
-    
+
     # exit function if bad response or empty HTML document
     if (not resp) or ('<!DOCTYPE html>\n\n<!---->' in resp.text):
         print('-'*50)
@@ -101,7 +95,7 @@ def search_jobs(params):
             'status' : texts[3]     if len(texts) > 3 else None,
             'job_url' : hrefs[0].split('?')[0],
             'firm_url': hrefs[1]    if len(hrefs) > 1 else None,
-            'keywords' : params['keywords'],
+            'search_keyword' : params['keywords'],
         }
 
         yield res
@@ -121,16 +115,13 @@ def get_number_jobs(location):
     return int(''.join(c for c in njobs if c.isnumeric()))
 
 # %%
-def save_data(data, label=today):
+def save_data(data, dst=dst):
     '''
     Save data
     '''
 
     df = pandas.DataFrame(data)
     
-    loc = ''.join(c for c in location if c.isalpha())
-    
-    dst = f'../data/jobposts/{label}-{loc}.csv'
     df.to_csv(dst, index=False)
 
     print(f'Saved {df.shape}:', dst)
@@ -162,7 +153,6 @@ def get_freq(data):
     # get word frequencies
     res = [{'keyword' : w, 'count' : words.count(w)} for w in set(words) if len(w) > 2]
     return res
-
     
 
 # %%
@@ -172,28 +162,38 @@ if __name__ == '__main__':
     print('Location:', location)
     print('Start time:', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
 
-    print('='*50)
-
     njobs = get_number_jobs(location)
 
-    # initialize data structures
-    
-    data = []
-    job_urls = set()
-    searched_kws = set()
-    kw = ''
+    if not os.path.exists(dst):
+        
+        # initialize empty data structures
+        data = []
+        job_urls = set()
+        searched_kws = set()
+        kw = ''
 
-    past = datetime.now()
+    else:
+        
+        # initialized from saved data
+        df = pandas.read_csv(dst)
+        
+        data = df.to_dict(orient='records')
+        job_urls = set(df['job_url'])
+        searched_kws = set(df['search_keyword'].dropna())
+        kw = df['search_keyword'].dropna().iloc[-1]
 
+        print(f'Continue from previous {len(data):,} records')
 
 # %%
 if __name__ == '__main__':
-    
+
     # break outer loop if most jobs found or no new keywords found
     while True:
 
-        # break inner loop if no more results in page
-        # typically 20 results per page
+        print('*'*50)
+        print(f'search-keyword ({len(searched_kws):,}):', kw)
+
+        # break inner loop if no more results in page (usually 10 results)
         run_search, start = True, 0
         while run_search:
 
@@ -220,7 +220,7 @@ if __name__ == '__main__':
                     job_urls.add(job_url)
                     data.append(search_res)
 
-                    # get yield time
+                    # report progress
                     print(f'[job {len(data):,} of {njobs:,}+]', datetime.now(), job_url)
 
         # save data
@@ -249,8 +249,6 @@ if __name__ == '__main__':
         kw = kws.iloc[0]['keyword']
         searched_kws.add(kw)
 
-        print('*'*50)
-        print(f'search-keyword ({len(searched_kws):,}):', kw)
 
     print('=' * 50)
     print('Script complete.')
